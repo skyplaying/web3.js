@@ -2756,7 +2756,7 @@ If there are any bugs, improvements, optimizations or any new feature proposal f
 
 #### web3-eth
 
-- Allow specifying percentage based factor in Web3Eth.calculateFeeData Param baseFeePerGasFactor #7332
+-   Allow specifying percentage based factor in Web3Eth.calculateFeeData Param baseFeePerGasFactor #7332
 
 ### Fixed
 
