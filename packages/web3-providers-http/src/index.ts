@@ -1,142 +1,130 @@
-import axios, { AxiosInstance } from 'axios';
-import Web3ProviderBase from 'web3-providers-base';
+﻿/*
+This file is part of web3.js.
+
+web3.js is free software: you can redistribute it and/or modify
+it under the terms of the GNU Lesser General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+web3.js is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public License
+along with web3.js.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+import fetch from 'cross-fetch';
 import {
-    ProviderOptions,
-    IWeb3Provider,
-    RpcResponse,
-    RpcOptions,
-    SubscriptionResponse,
-    HttpOptions,
-} from 'web3-providers-base/lib/types';
-import { EventEmitter } from 'events';
+	EthExecutionAPI,
+	JsonRpcResponseWithResult,
+	Web3APIMethod,
+	Web3APIPayload,
+	Web3APIReturnType,
+	Web3APISpec,
+	Web3BaseProvider,
+	Web3ProviderStatus,
+} from 'web3-types';
+import { InvalidClientError, MethodNotImplementedError, ResponseError } from 'web3-errors';
+import { HttpProviderOptions } from './types.js';
 
-export default class Web3ProvidersHttp
-    extends Web3ProviderBase
-    implements IWeb3Provider
-{
-    private _httpClient: AxiosInstance;
-    private _subscriptions: {
-        [subscriptionId: number]: ReturnType<typeof setTimeout>;
-    } = {};
+export { HttpProviderOptions } from './types.js';
 
-    constructor(options: ProviderOptions) {
-        super(options);
-        this._httpClient = Web3ProvidersHttp._createHttpClient(
-            options.providerUrl
-        );
-    }
+export default class HttpProvider<
+	API extends Web3APISpec = EthExecutionAPI,
+> extends Web3BaseProvider<API> {
+	private readonly clientUrl: string;
+	private readonly httpProviderOptions: HttpProviderOptions | undefined;
 
-    private static _validateProviderUrl(providerUrl: string): boolean {
-        try {
-            return (
-                typeof providerUrl !== 'string' ||
-                /^http(s)?:\/\//i.test(providerUrl)
-            );
-        } catch (error) {
-            throw Error(`Failed to validate provider string: ${error.message}`);
-        }
-    }
+	public constructor(clientUrl: string, httpProviderOptions?: HttpProviderOptions) {
+		super();
+		if (!HttpProvider.validateClientUrl(clientUrl)) throw new InvalidClientError(clientUrl);
+		this.clientUrl = clientUrl;
+		this.httpProviderOptions = httpProviderOptions;
+	}
 
-    private static _createHttpClient(baseUrl: string): AxiosInstance {
-        try {
-            if (!Web3ProvidersHttp._validateProviderUrl(baseUrl))
-                throw Error('Invalid HTTP(S) URL provided');
-            return axios.create({ baseURL: baseUrl });
-        } catch (error) {
-            throw Error(`Failed to create HTTP client: ${error.message}`);
-        }
-    }
+	private static validateClientUrl(clientUrl: string): boolean {
+		return typeof clientUrl === 'string' ? /^http(s)?:\/\//i.test(clientUrl) : false;
+	}
 
-    setProvider(providerUrl: string) {
-        try {
-            this._httpClient = Web3ProvidersHttp._createHttpClient(providerUrl);
-            super.providerUrl = providerUrl;
-        } catch (error) {
-            throw Error(`Failed to set provider: ${error.message}`);
-        }
-    }
+	/* eslint-disable class-methods-use-this */
+	public getStatus(): Web3ProviderStatus {
+		throw new MethodNotImplementedError();
+	}
 
-    supportsSubscriptions() {
-        return true;
-    }
+	/* eslint-disable class-methods-use-this */
+	public supportsSubscriptions() {
+		return false;
+	}
 
-    async send(
-        rpcOptions: RpcOptions,
-        httpOptions?: HttpOptions
-    ): Promise<RpcResponse> {
-        try {
-            if (this._httpClient === undefined)
-                throw Error('No HTTP client initiliazed');
-            const response = await this._httpClient.post(
-                '',
-                rpcOptions,
-                httpOptions?.axiosConfig || {}
-            );
-            return response.data.data ? response.data.data : response.data;
-        } catch (error) {
-            throw Error(`Error sending: ${error.message}`);
-        }
-    }
+	public async request<
+		Method extends Web3APIMethod<API>,
+		ResultType = Web3APIReturnType<API, Method>,
+	>(
+		payload: Web3APIPayload<API, Method>,
+		requestOptions?: RequestInit,
+	): Promise<JsonRpcResponseWithResult<ResultType>> {
+		const providerOptionsCombined = {
+			...this.httpProviderOptions?.providerOptions,
+			...requestOptions,
+		};
+		const response = await fetch(this.clientUrl, {
+			...providerOptionsCombined,
+			method: 'POST',
+			headers: {
+				...providerOptionsCombined.headers,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify(payload),
+		});
+		if (!response.ok) {
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+			throw new ResponseError(await response.json(), undefined, undefined, response.status);
+		}
 
-    subscribe(
-        rpcOptions: RpcOptions,
-        httpOptions?: HttpOptions
-    ): SubscriptionResponse {
-        try {
-            if (this._httpClient === undefined)
-                throw Error('No HTTP client initiliazed');
-            const eventEmitter = new EventEmitter();
-            const subscriptionId = Math.floor(
-                Math.random() * Number.MAX_SAFE_INTEGER
-            ); // generate random integer
-            this._subscribe(
-                rpcOptions,
-                eventEmitter,
-                subscriptionId,
-                httpOptions
-            );
-            return { eventEmitter, subscriptionId };
-        } catch (error) {
-            throw Error(`Error subscribing: ${error.message}`);
-        }
-    }
+		return (await response.json()) as JsonRpcResponseWithResult<ResultType>;
+	}
 
-    private async _subscribe(
-        rpcOptions: RpcOptions,
-        eventEmitter: EventEmitter,
-        subscriptionId: number,
-        httpOptions?: HttpOptions
-    ) {
-        try {
-            const response = await this.send(rpcOptions, httpOptions);
-            eventEmitter.emit('response', response);
-            this._subscriptions[subscriptionId] = setTimeout(
-                () =>
-                    this._subscribe(
-                        rpcOptions,
-                        eventEmitter,
-                        subscriptionId,
-                        httpOptions
-                    ),
-                httpOptions?.subscriptionOptions?.milisecondsBetweenRequests ||
-                    1000
-            );
-        } catch (error) {
-            throw Error(`Error subscribing: ${error.message}`);
-        }
-    }
+	/* eslint-disable class-methods-use-this */
+	public on() {
+		throw new MethodNotImplementedError();
+	}
 
-    unsubscribe(eventEmitter: EventEmitter, subscriptionId: number) {
-        try {
-            if (!this._subscriptions[subscriptionId])
-                throw Error(
-                    `Subscription with id: ${subscriptionId} does not exist`
-                );
-            clearTimeout(this._subscriptions[subscriptionId]);
-            eventEmitter.emit('unsubscribed');
-            delete this._subscriptions[subscriptionId];
-        } catch (error) {
-            throw Error(`Error unsubscribing: ${error.message}`);
-        }
-    }
+	/* eslint-disable class-methods-use-this */
+	public removeListener() {
+		throw new MethodNotImplementedError();
+	}
+
+	/* eslint-disable class-methods-use-this */
+	public once() {
+		throw new MethodNotImplementedError();
+	}
+
+	/* eslint-disable class-methods-use-this */
+	public removeAllListeners() {
+		throw new MethodNotImplementedError();
+	}
+
+	/* eslint-disable class-methods-use-this */
+	public connect() {
+		throw new MethodNotImplementedError();
+	}
+
+	/* eslint-disable class-methods-use-this */
+	public disconnect() {
+		throw new MethodNotImplementedError();
+	}
+
+	/* eslint-disable class-methods-use-this */
+	public reset() {
+		throw new MethodNotImplementedError();
+	}
+
+	/* eslint-disable class-methods-use-this */
+	public reconnect() {
+		throw new MethodNotImplementedError();
+	}
 }
+
+export { HttpProvider };

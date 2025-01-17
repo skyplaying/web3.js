@@ -1,2 +1,1 @@
-# Ignore artifacts:
-lib
+../../templates/.prettierignore.tmpl
